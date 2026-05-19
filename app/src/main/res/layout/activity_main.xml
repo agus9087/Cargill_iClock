@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_dark"
+    android:padding="24dp">
+
+    <LinearLayout
+        android:id="@+id/leftPanel"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:background="@drawable/rounded_card"
+        android:padding="20dp"
+        app:layout_constraintHorizontal_weight="1.2"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toStartOf="@+id/rightPanel">
+
+        <TextView
+            android:id="@+id/textClock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="18:02:41"
+            android:textColor="@color/text_white"
+            android:textSize="64sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/textDate"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tuesay, 28 of April"
+            android:textColor="@color/text_muted"
+            android:textSize="18sp" />
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:layout_marginTop="20dp"
+            android:background="@drawable/camera_border"
+            android:clipToOutline="true">
+
+            <androidx.camera.view.PreviewView
+                android:id="@+id/previewView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <TextView
+                android:id="@+id/iaStatusText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:text="@string/ia_system_waiting"
+                android:textColor="@color/text_muted" />
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/txtReady"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="@string/status_ready"
+            android:textColor="@color/text_white" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/rightPanel"
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:paddingStart="24dp"
+        app:layout_constraintHorizontal_weight="1"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toEndOf="@id/leftPanel">
+
+        <TextView
+            android:id="@+id/txtPinDisplay"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:background="@drawable/rounded_card"
+            android:gravity="center"
+            android:text="@string/pin_hint"
+            android:textColor="@color/text_muted"
+            android:textSize="24sp"
+            android:letterSpacing="0.2" />
+
+        <GridLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:columnCount="3"
+            android:alignmentMode="alignMargins">
+
+            <Button android:id="@+id/btn1" style="@style/PinButton" android:text="1" />
+            <Button android:id="@+id/btn2" style="@style/PinButton" android:text="2" />
+            <Button android:id="@+id/btn3" style="@style/PinButton" android:text="3" />
+
+            <Button android:id="@+id/btn4" style="@style/PinButton" android:text="4" />
+            <Button android:id="@+id/btn5" style="@style/PinButton" android:text="5" />
+            <Button android:id="@+id/btn6" style="@style/PinButton" android:text="6" />
+
+            <Button android:id="@+id/btn7" style="@style/PinButton" android:text="7" />
+            <Button android:id="@+id/btn8" style="@style/PinButton" android:text="8" />
+            <Button android:id="@+id/btn9" style="@style/PinButton" android:text="9" />
+
+            <Button android:id="@+id/btnClear" style="@style/PinButton" android:text="C" />
+            <Button android:id="@+id/btn0" style="@style/PinButton" android:text="0" />
+            <Button android:id="@+id/btnConfirm" style="@style/PinButton" android:text="✓" />
+
+        </GridLayout>
+
+        <Button
+            android:id="@+id/btnMarcaje"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="@color/button_blue"
+            android:text="@string/btn_marcaje"
+            android:textAllCaps="false" />
+
+        <Button
+            android:id="@+id/btnRostro"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:layout_marginTop="8dp"
+            android:backgroundTint="@color/button_blue"
+            android:text="@string/btn_rostro"
+            android:textAllCaps="false" />
+
+        <TextView
+            android:id="@+id/txtReset"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:layout_marginTop="10dp"
+            android:text="@string/btn_reset"
+            android:textColor="@color/text_muted" />
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>
