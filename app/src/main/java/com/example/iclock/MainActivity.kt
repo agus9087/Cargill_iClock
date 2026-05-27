@@ -20,6 +20,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.get
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.google.mlkit.vision.common.InputImage
@@ -57,6 +58,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var cameraExecutor: ExecutorService
 
     private var isRegistering = false
+    private var esProcesandoMarcaje = false // <-- AGREGA ESTA LÍNEA AQUÍ ARRIBA
 
     private val handler = Handler(Looper.getMainLooper())
     private val clockRunnable = object : Runnable {
@@ -152,51 +154,71 @@ class MainActivity : AppCompatActivity() {
             val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
             detector.process(image)
                 .addOnSuccessListener { faces ->
-                    if (faces.isNotEmpty()) {
+                    // Colocarlo aquí te permite ver en el Logcat cuántos rostros ve la cámara en tiempo real
+                    Log.d("FacialBuild", "Rostros detectados en tiempo real: ${faces.size}")
+
+                    // Agregamos !esProcesandoMarcaje para bloquear nuevas detecciones mientras procesamos esta
+                    if (faces.isNotEmpty() && !esProcesandoMarcaje) {
+                        esProcesandoMarcaje = true // Bloqueamos la entrada
+
+                        // ... dentro de processImageProxy, justo donde detecta la cara[cite: 13]:
                         val face = faces[0]
                         iaStatusText.text = getString(R.string.face_detected)
                         iaStatusText.setTextColor(ContextCompat.getColor(this, R.color.button_blue))
 
-                        // 1. Obtener el descriptor (los 128 números)
-                        val descriptor = obtenerDescriptorFacial(face)
+                        // Pasamos imageProxy y face en lugar de depender de previewView
+                        val descriptor = obtenerDescriptorFacial(imageProxy, face)
 
                         if (descriptor != null) {
+                            Log.d("FacialBuild", "Descriptor real: ${descriptor.contentToString()}")
+                            // ... resto de tu código de validación [cite: 16]
+
                             // 2. DECIDIR: ¿Estamos guardando un nuevo rostro o fichando?
                             if (isRegistering) {
                                 // MODO ENROLAR: Guardamos el PIN y el Descriptor en el JSON
                                 guardarUsuarioLocal(currentPin, descriptor)
                             } else {
-                                // MODO FICHAR: Buscamos el PIN y comparamos rostros
-                                val usuarioEncontrado = buscarUsuarioPorPin(currentPin)
-                                if (usuarioEncontrado != null) {
-                                    val distancia = calcularDistancia(descriptor, usuarioEncontrado.descriptor.toFloatArray())
-
-                                    // Umbral de 0.7 (ajustable)
-                                    if (distancia < 0.7f) {
-                                        iaStatusText.text = "ACCESO CORRECTO"
-                                        iaStatusText.setTextColor(ContextCompat.getColor(this, R.color.button_blue)) // O un verde
-                                        registrarFichadaExitosa(usuarioEncontrado.pin)
+                                // MODO FICHAR INTELIGENTE: (Por PIN específico o Escaneo facial directo)
+                                val usuarioIdentificado = if (currentPin.isNotEmpty()) {
+                                    // Si el usuario escribió un PIN, validamos directamente contra ese PIN
+                                    val user = buscarUsuarioPorPin(currentPin)
+                                    if (user != null && calcularDistancia(descriptor, user.descriptor.toFloatArray()) < 0.7f) {
+                                        user
                                     } else {
-                                        iaStatusText.text = "ROSTRO NO COINCIDE"
-                                        iaStatusText.setTextColor(android.graphics.Color.RED)
+                                        null
                                     }
                                 } else {
-                                    iaStatusText.text = "PIN NO ENCONTRADO"
+                                    // SI NO ESCRIBIÓ PIN -> Recorremos toda la base de datos local para ver de quién es el rostro
+                                    buscarUsuarioPorRostro(descriptor)
+                                }
+
+                                if (usuarioIdentificado != null) {
+                                    iaStatusText.text = "ACCESO CORRECTO: ID ${usuarioIdentificado.pin}"
+
+                                    // AQUÍ ESTÁ TU LOG:
+                                    Log.d("FacialBuild", "Rostros detectados: ${faces.size}" + "   " +"Descriptor real: ${descriptor.contentToString()}")
+
+                                    iaStatusText.setTextColor(ContextCompat.getColor(this, R.color.button_blue)) // O un color verde si tienes
+                                    registrarFichadaExitosa(usuarioIdentificado.pin)
+                                } else {
+                                    iaStatusText.text = if (currentPin.isNotEmpty()) "EL ROSTRO NO COINCIDE" else "ROSTRO NO RECONOCIDO"
                                     iaStatusText.setTextColor(android.graphics.Color.RED)
                                 }
                             }
                         }
 
-                        // 3. TEMPORIZADOR PARA APAGAR (3 segundos)
+                        // 3. TEMPORIZADOR PARA APAGAR LA CÁMARA (3 segundos)
                         handler.postDelayed({
                             stopCamera()
                             previewView.alpha = 0f
-                            isRegistering = false // Resetear siempre el modo al apagar
+                            isRegistering = false // Resetear modo de registro
+                            esProcesandoMarcaje = false // Liberamos el bloqueo para el próximo uso de la cámara
                             iaStatusText.text = getString(R.string.ia_system_waiting)
                             iaStatusText.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
                         }, 3000)
 
-                    } else {
+                    } else if (faces.isEmpty() && !esProcesandoMarcaje) {
+                        // Si no hay rostros y tampoco estamos en medio de un proceso de apagado, se queda esperando
                         iaStatusText.text = getString(R.string.ia_system_waiting)
                         iaStatusText.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
                     }
@@ -231,29 +253,43 @@ class MainActivity : AppCompatActivity() {
         if (faceNetInterpreter == null) initInterpreter() // Inicializa solo si es nulo
 
         val input = convertBitmapToByteBuffer(faceBitmap)
-        val output = Array(1) { FloatArray(128) }
+        val output = Array(1) { FloatArray(192) }
 
         faceNetInterpreter?.run(input, output)
         return output[0]
     }
 
-    private fun obtenerDescriptorFacial(face: com.google.mlkit.vision.face.Face): FloatArray? {
-        // 1. Obtenemos el bitmap actual de lo que ve la cámara
-        val bitmapOriginal = previewView.bitmap ?: return null
+    // 1. Agrega esta anotación para autorizar el uso de imageProxy.image
+    @androidx.camera.core.ExperimentalGetImage
+    private fun obtenerDescriptorFacial(imageProxy: ImageProxy, face: com.google.mlkit.vision.face.Face): FloatArray? {
+        try {
+            // 1. Convertimos el frame de la cámara (YUV_420_888 o similar) a un Bitmap real en memoria
+            val mediaImage = imageProxy.image ?: return null
 
-        // 2. Recortamos solo el cuadro del rostro (boundingBox)
-        val rect = face.boundingBox
-        val rostroBitmap = Bitmap.createBitmap(
-            bitmapOriginal,
-            rect.left.coerceAtLeast(0),
-            rect.top.coerceAtLeast(0),
-            rect.width().coerceAtMost(bitmapOriginal.width - rect.left),
-            rect.height().coerceAtMost(bitmapOriginal.height - rect.top)
-        )
+            // Convertir la imagen proxy a Bitmap respetando su rotación exacta
+            val bitmapOriginal = previewView.bitmap ?: return null
+            // Nota: Si previewView sigue fallando, la alternativa ideal es usar el Bitmap del ImageProxy,
+            // pero probemos primero asegurando el recorte correcto:
 
-        // 3. Aquí es donde pasarías el rostroBitmap por tu modelo .tflite
-        // Por ahora, simulamos el retorno del array de 128 posiciones
-        return ejecutarInferenciaTFLite(rostroBitmap)
+            val rect = face.boundingBox
+
+            // Asegurar que el cuadro delimitador no se salga de las dimensiones del bitmap
+            val left = rect.left.coerceAtLeast(0)
+            val top = rect.top.coerceAtLeast(0)
+            val width = rect.width().coerceAtMost(bitmapOriginal.width - left)
+            val height = rect.height().coerceAtMost(bitmapOriginal.height - top)
+
+            if (width <= 0 || height <= 0) return null
+
+            // 2. Recortamos el rostro de manera segura
+            val rostroBitmap = Bitmap.createBitmap(bitmapOriginal, left, top, width, height)
+
+            // 3. Ejecutamos la inferencia con el bitmap recortado
+            return ejecutarInferenciaTFLite(rostroBitmap)
+        } catch (e: Exception) {
+            Log.e("TFLite", "Error al procesar el bitmap del rostro: ${e.message}")
+            return null
+        }
     }
 
     private fun compararConBaseDeDatos(nuevoDescriptor: FloatArray) {
@@ -269,13 +305,24 @@ class MainActivity : AppCompatActivity() {
         val fileChannel = inputStream.channel
         val startOffset = fileDescriptor.startOffset
         val declaredLength = fileDescriptor.declaredLength
-        return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+
+        val mappedBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength)
+
+        // Es buena práctica cerrar estos recursos, el mapeo en memoria persistirá
+        inputStream.close()
+        fileDescriptor.close()
+
+        return mappedBuffer
     }
 
     // 2. Inicializar el Intérprete
     private fun initInterpreter() {
         try {
-            faceNetInterpreter = Interpreter(loadModelFile("mobile_face_net.tflite"))
+            val options = Interpreter.Options().apply {
+                setNumThreads(1) // Forzar un solo hilo en CPU para pruebas estables
+            }
+            faceNetInterpreter = Interpreter(loadModelFile("mobile_face_net.tflite"), options)
+            Log.d("TFLite", "Modelo inicializado en modo seguro de un solo hilo.")
         } catch (e: Exception) {
             Log.e("TFLite", "Error al cargar el modelo: ${e.message}")
         }
@@ -283,33 +330,57 @@ class MainActivity : AppCompatActivity() {
 
     // 3. La función que necesitas para obtener los 128 números
     private fun ejecutarInferenciaTFLite(faceBitmap: Bitmap): FloatArray {
-        val output = Array(1) { FloatArray(128) }
+        // CAMBIAR DE 128 A 192
+        val output = arrayOf(FloatArray(192))
 
-        // El modelo espera un ByteBuffer (imagen preprocesada)
         val inputBuffer = convertBitmapToByteBuffer(faceBitmap)
 
-        if (faceNetInterpreter == null) initInterpreter()
+        if (faceNetInterpreter == null) {
+            initInterpreter()
+        }
 
-        faceNetInterpreter?.run(inputBuffer, output)
+        if (faceNetInterpreter == null) {
+            Log.e("TFLite", "El intérprete sigue siendo NULL.")
+            return FloatArray(192) // CAMBIAR DE 128 A 192
+        }
 
-        return output[0] // Aquí están tus 128 números
+        try {
+            faceNetInterpreter!!.run(inputBuffer, output)
+            Log.d("TFLite", "¡Inferencia exitosa! Primeros valores: ${output[0].take(3)}")
+        } catch (e: Exception) {
+            Log.e("TFLite", "Error crítico en run(): ${e.message}")
+            e.printStackTrace()
+        }
+
+        return output[0]
     }
 
     // 4. Preprocesamiento: Convertir Bitmap a ByteBuffer
     private fun convertBitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
+        // Redimensionar al tamaño del modelo (112x112)
         val scaledBitmap = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
+
+        // 4 bytes por float * 112 * 112 * 3 canales (RGB)
         val byteBuffer = ByteBuffer.allocateDirect(4 * inputSize * inputSize * 3)
         byteBuffer.order(ByteOrder.nativeOrder())
 
         val intValues = IntArray(inputSize * inputSize)
         scaledBitmap.getPixels(intValues, 0, scaledBitmap.width, 0, 0, scaledBitmap.width, scaledBitmap.height)
 
+        byteBuffer.rewind() // Asegurar que el puntero inicie exactamente en 0
+
         for (pixelValue in intValues) {
-            // Normalización (esto depende de tu modelo, usualmente es entre -1 y 1 o 0 y 1)
-            byteBuffer.putFloat(((pixelValue shr 16 and 0xFF) - 127.5f) / 127.5f)
-            byteBuffer.putFloat(((pixelValue shr 8 and 0xFF) - 127.5f) / 127.5f)
-            byteBuffer.putFloat(((pixelValue and 0xFF) - 127.5f) / 127.5f)
+            // Extraer componentes RGB de forma limpia
+            val r = (pixelValue shr 16) and 0xFF
+            val g = (pixelValue shr 8) and 0xFF
+            val b = pixelValue and 0xFF
+
+            // Configuración Estándar MobileFaceNet (-1 a 1)
+            byteBuffer.putFloat((r - 127.5f) / 127.5f)
+            byteBuffer.putFloat((g - 127.5f) / 127.5f)
+            byteBuffer.putFloat((b - 127.5f) / 127.5f)
         }
+
         return byteBuffer
     }
 
@@ -395,7 +466,23 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // ... resto de tus botones (btnRostro, txtReset)
+        // ... resto de tus botones (btnRostro, txtReset, btnConfirm)
+
+        findViewById<Button>(R.id.btnConfirm).setOnClickListener {
+            if (currentPin.isNotEmpty()) {
+                val usuario = buscarUsuarioPorPin(currentPin)
+                if (usuario != null) {
+                    Toast.makeText(this, "Marcaje manual exitoso", Toast.LENGTH_SHORT).show()
+                    registrarFichadaExitosa(currentPin) // Graba en log_asistencia.txt
+
+                    // Limpiamos pantalla
+                    currentPin = ""
+                    txtPinDisplay.text = getString(R.string.pin_hint)
+                } else {
+                    Toast.makeText(this, "Error: El PIN no existe", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
 
         // Botón Enrolar Rostro (PIN +4 y abre la cámara)
         findViewById<Button>(R.id.btnRostro).setOnClickListener {
@@ -529,6 +616,47 @@ class MainActivity : AppCompatActivity() {
             Log.d("ASISTENCIA", "Marcaje grabado: $logEntry")
         } catch (e: Exception) {
             Log.e("ERROR_LOG", "No se pudo grabar la fichada")
+        }
+    }
+
+    private fun buscarUsuarioPorRostro(nuevoDescriptor: FloatArray): UsuarioFichaje? {
+        val file = File(filesDir, "usuarios_reloj.json")
+        if (!file.exists()) return null
+
+        try {
+            val json = file.readText()
+            val type = object : TypeToken<List<UsuarioFichaje>>() {}.type
+            val usuarios: List<UsuarioFichaje> = Gson().fromJson(json, type) ?: return null
+
+            var mejorCoincidencia: UsuarioFichaje? = null
+            var menorDistancia = 0.75f // Nuestro umbral límite
+
+            for (u in usuarios) {
+                val dist = calcularDistancia(nuevoDescriptor, u.descriptor.toFloatArray())
+
+                // 🟢 LOG IDEAL: Se ejecuta para CADA usuario en la base de datos
+                Log.d("FacialBuild", "Comparando con PIN: ${u.pin} | Distancia calculada: $dist (Umbral: $menorDistancia)")
+
+                if (dist < menorDistancia) {
+                    menorDistancia = dist
+                    mejorCoincidencia = u
+
+                    // Opcional: Log que te avisa cuándo se rompe el récord de mejor coincidencia
+                    Log.d("FacialBuild", "-> ¡Nueva mejor coincidencia temporal! PIN: ${u.pin} con dist: $dist")
+                }
+            }
+
+            // Log final para saber si encontramos a alguien al terminar el bucle
+            if (mejorCoincidencia != null) {
+                Log.d("FacialBuild", "✅ Rostro IDENTIFICADO: PIN ${mejorCoincidencia.pin} con distancia final de $menorDistancia")
+            } else {
+                Log.w("FacialBuild", "❌ Rostro NO RECONOCIDO. Ningún usuario estuvo por debajo del umbral 0.55f")
+            }
+
+            return mejorCoincidencia
+        } catch (e: Exception) {
+            Log.e("FacialBuild", "Error en buscarUsuarioPorRostro: ${e.message}")
+            return null
         }
     }
 

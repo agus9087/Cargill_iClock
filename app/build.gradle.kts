@@ -9,6 +9,10 @@ android {
         version = release(36) {
             minorApiLevel = 1
         }
+        @Suppress("UnstableApiUsage")
+        androidResources {
+            noCompress.add("tflite")
+        }
     }
 
     packaging {
