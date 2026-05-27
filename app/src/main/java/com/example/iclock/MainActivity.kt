@@ -154,85 +154,64 @@ class MainActivity : AppCompatActivity() {
             val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
             detector.process(image)
                 .addOnSuccessListener { faces ->
-                    // Colocarlo aquí te permite ver en el Logcat cuántos rostros ve la cámara en tiempo real
-                    Log.d("FacialBuild", "Rostros detectados en tiempo real: ${faces.size}")
-
-                    // Agregamos !esProcesandoMarcaje para bloquear nuevas detecciones mientras procesamos esta
+                    // 1. Si ya estamos procesando un marcaje, ignoramos olímpicamente CUALQUIER frame nuevo
                     if (faces.isNotEmpty() && !esProcesandoMarcaje) {
-                        esProcesandoMarcaje = true // Bloqueamos la entrada
+                        esProcesandoMarcaje = true // Bloqueo inmediato
 
-                        // ... dentro de processImageProxy, justo donde detecta la cara[cite: 13]:
                         val face = faces[0]
-                        iaStatusText.text = getString(R.string.face_detected)
-                        iaStatusText.setTextColor(ContextCompat.getColor(this, R.color.button_blue))
+                        iaStatusText.text = "Procesando rostro..."
 
-                        // Pasamos imageProxy y face en lugar de depender de previewView
                         val descriptor = obtenerDescriptorFacial(imageProxy, face)
 
                         if (descriptor != null) {
-                            Log.d("FacialBuild", "Descriptor real: ${descriptor.contentToString()}")
-                            // ... resto de tu código de validación [cite: 16]
+                            val usuarioIdentificado = buscarUsuarioPorRostro(descriptor)
 
-                            // 2. DECIDIR: ¿Estamos guardando un nuevo rostro o fichando?
-                            if (isRegistering) {
-                                // MODO ENROLAR: Guardamos el PIN y el Descriptor en el JSON
-                                guardarUsuarioLocal(currentPin, descriptor)
+                            if (usuarioIdentificado != null) {
+                                // FICHADA EXITOSA
+                                iaStatusText.text = "ACCESO CORRECTO: ID ${usuarioIdentificado.pin}"
+                                iaStatusText.setTextColor(ContextCompat.getColor(this, R.color.button_blue))
+                                registrarFichadaExitosa(usuarioIdentificado.pin)
+
+                                // 2. CORRECCIÓN CRÍTICA: Le damos 3 segundos de congelamiento al sistema
+                                // para que el usuario vea su éxito y se retire de la cámara.
+                                Handler(Looper.getMainLooper()).postDelayed({
+                                    iaStatusText.text = "Esperando rostro..."
+                                    iaStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.black))
+
+                                    // Al liberar la bandera aquí, cerramos la puerta a los frames viejos
+                                    esProcesandoMarcaje = false
+                                }, 3000) // 3000 milisegundos = 3 segundos de retraso
+
                             } else {
-                                // MODO FICHAR INTELIGENTE: (Por PIN específico o Escaneo facial directo)
-                                val usuarioIdentificado = if (currentPin.isNotEmpty()) {
-                                    // Si el usuario escribió un PIN, validamos directamente contra ese PIN
-                                    val user = buscarUsuarioPorPin(currentPin)
-                                    if (user != null && calcularDistancia(descriptor, user.descriptor.toFloatArray()) < 0.7f) {
-                                        user
-                                    } else {
-                                        null
-                                    }
-                                } else {
-                                    // SI NO ESCRIBIÓ PIN -> Recorremos toda la base de datos local para ver de quién es el rostro
-                                    buscarUsuarioPorRostro(descriptor)
-                                }
+                                // ROSTRO DETECTADO PERO NO REGISTRADO (Distancia > Umbral)
+                                iaStatusText.text = "Rostro no reconocido"
+                                iaStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.holo_red_dark))
 
-                                if (usuarioIdentificado != null) {
-                                    iaStatusText.text = "ACCESO CORRECTO: ID ${usuarioIdentificado.pin}"
-
-                                    // AQUÍ ESTÁ TU LOG:
-                                    Log.d("FacialBuild", "Rostros detectados: ${faces.size}" + "   " +"Descriptor real: ${descriptor.contentToString()}")
-
-                                    iaStatusText.setTextColor(ContextCompat.getColor(this, R.color.button_blue)) // O un color verde si tienes
-                                    registrarFichadaExitosa(usuarioIdentificado.pin)
-                                } else {
-                                    iaStatusText.text = if (currentPin.isNotEmpty()) "EL ROSTRO NO COINCIDE" else "ROSTRO NO RECONOCIDO"
-                                    iaStatusText.setTextColor(android.graphics.Color.RED)
-                                }
+                                // Si no se reconoce, liberamos rápido (ej. 1.5 segundos) para que vuelva a intentar
+                                Handler(Looper.getMainLooper()).postDelayed({
+                                    iaStatusText.text = "Esperando rostro..."
+                                    esProcesandoMarcaje = false
+                                }, 1500)
                             }
+                        } else {
+                            // Si el descriptor falló, liberamos la bandera de inmediato
+                            esProcesandoMarcaje = false
                         }
-
-                        // 3. TEMPORIZADOR PARA APAGAR LA CÁMARA (3 segundos)
-                        handler.postDelayed({
-                            stopCamera()
-                            previewView.alpha = 0f
-                            isRegistering = false // Resetear modo de registro
-                            esProcesandoMarcaje = false // Liberamos el bloqueo para el próximo uso de la cámara
-                            iaStatusText.text = getString(R.string.ia_system_waiting)
-                            iaStatusText.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
-                        }, 3000)
-
-                    } else if (faces.isEmpty() && !esProcesandoMarcaje) {
-                        // Si no hay rostros y tampoco estamos en medio de un proceso de apagado, se queda esperando
-                        iaStatusText.text = getString(R.string.ia_system_waiting)
-                        iaStatusText.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
                     }
+                    // ... (aquí cierra el bloque de addOnSuccessListener)
                 }
                 .addOnFailureListener { e ->
                     Log.e(TAG, "Face detection failed", e)
                 }
+                // 📍 AQUÍ ES DONDE VA EL COMPLETELISTENER:
                 .addOnCompleteListener {
                     imageProxy.close()
                 }
         } else {
             imageProxy.close()
         }
-    }
+    } // Aquí cierra processImageProxy
+
 
     private fun extractFaceBitmap(imageProxy: ImageProxy, face: com.google.mlkit.vision.face.Face): Bitmap {
         val bitmap = previewView.bitmap // Forma rápida si usas PreviewView
