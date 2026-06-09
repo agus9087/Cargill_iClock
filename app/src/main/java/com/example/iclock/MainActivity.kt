@@ -427,23 +427,32 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupActionButtons() {
         findViewById<Button>(R.id.btnMarcaje).setOnClickListener {
-            // 1. Verificamos si el PIN está vacío
+
+            // 1. Si no hay PIN, usamos reconocimiento facial (Cámara)
             if (currentPin.isEmpty()) {
-                // 2. Verificamos si tenemos permisos antes de abrir la cámara
+
                 if (allPermissionsGranted()) {
+                    // Tenemos permisos, arrancamos la cámara
                     startCamera()
                     Toast.makeText(this, "Iniciando reconocimiento facial...", Toast.LENGTH_SHORT).show()
                 } else {
-                    // Si no hay permisos, los pedimos
+                    // NO tenemos permisos, los solicitamos (NO registramos nada todavía)
                     ActivityCompat.requestPermissions(
                         this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
                     )
                 }
+
             } else {
-                // Si el PIN tiene algo, mostramos un aviso
-                Toast.makeText(this, "Limpia el PIN para usar reconocimiento facial", Toast.LENGTH_SHORT).show()
+                // 2. Si el PIN SÍ tiene texto, se ficha directamente por teclado numérico
+                registrarFichadaExitosa(currentPin)
+                Toast.makeText(this, "Fichada registrada por PIN", Toast.LENGTH_SHORT).show()
+
+                // Aquí deberías limpiar el PIN para el próximo usuario
+                currentPin = ""
+                // actualizarPantalla() (O la función que uses para limpiar el textview/label)
             }
         }
+
 
         // ... resto de tus botones (btnRostro, txtReset, btnConfirm)
 
@@ -594,7 +603,7 @@ class MainActivity : AppCompatActivity() {
             fileAsistencia.appendText(logEntry) // Agrega una línea al final del archivo
             Log.d("ASISTENCIA", "Marcaje grabado: $logEntry")
         } catch (e: Exception) {
-            Log.e("ERROR_LOG", "No se pudo grabar la fichada")
+            Log.e("ERROR_LOG", "No se pudo grabar la fichada", e)
         }
     }
 
