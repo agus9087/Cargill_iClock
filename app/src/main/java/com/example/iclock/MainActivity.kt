@@ -57,6 +57,10 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var cameraExecutor: ExecutorService
 
+    // Capa de datos cifrada (tarea #6): toda la E/S de archivos pasa por estos repositorios.
+    private lateinit var userRepo: UserRepository
+    private lateinit var attendanceRepo: AttendanceRepository
+
     private var isRegistering = false
     private var esProcesandoMarcaje = false // <-- AGREGA ESTA LÍNEA AQUÍ ARRIBA
 
@@ -81,6 +85,10 @@ class MainActivity : AppCompatActivity() {
         textReady = findViewById(R.id.txtReady)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
+
+        // Repositorios cifrados (capa de datos). Deben crearse antes de fichar o enrolar.
+        userRepo = UserRepository(this)
+        attendanceRepo = AttendanceRepository(this)
 
         // Configurar los botones numéricos
         setupKeypad()
@@ -537,28 +545,9 @@ class MainActivity : AppCompatActivity() {
 
     // --- 1. FUNCIÓN PARA GUARDAR (ENROLAR) ---
     private fun guardarUsuarioLocal(pin: String, descriptor: FloatArray) {
-        val file = File(filesDir, "usuarios_reloj.json")
-        val gson = Gson()
-
         try {
-            // Leer usuarios existentes si el archivo existe
-            val listaUsuarios: MutableList<UsuarioFichaje> = if (file.exists()) {
-                val json = file.readText()
-                val type = object : TypeToken<MutableList<UsuarioFichaje>>() {}.type
-                gson.fromJson(json, type) ?: mutableListOf()
-            } else {
-                mutableListOf()
-            }
-
-            // Eliminar si el PIN ya existía para sobrescribirlo
-            listaUsuarios.removeAll { it.pin == pin }
-
-            // Agregar el nuevo usuario (Convertimos FloatArray a List para GSON)
-            listaUsuarios.add(UsuarioFichaje(pin, descriptor.toList()))
-
-            // Guardar de nuevo en el archivo
-            file.writeText(gson.toJson(listaUsuarios))
-
+            // Enrola y reescribe usuarios_reloj.json CIFRADO (archivo completo) + refresca caché.
+            userRepo.enroll(pin, descriptor)
             runOnUiThread {
                 Toast.makeText(this, "Rostro enrolado con éxito para el PIN $pin", Toast.LENGTH_SHORT).show()
             }
@@ -567,85 +556,31 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // --- 2. FUNCIÓN PARA BUSCAR USUARIO ---
-    private fun buscarUsuarioPorPin(pin: String): UsuarioFichaje? {
-        val file = File(filesDir, "usuarios_reloj.json")
-        if (!file.exists()) return null
+    // --- 2. FUNCIÓN PARA BUSCAR USUARIO (desde la caché cifrada en memoria) ---
+    private fun buscarUsuarioPorPin(pin: String): UsuarioFichaje? = userRepo.findByPin(pin)
 
-        return try {
-            val json = file.readText()
-            val type = object : TypeToken<List<UsuarioFichaje>>() {}.type
-            val usuarios: List<UsuarioFichaje> = Gson().fromJson(json, type)
-            usuarios.find { it.pin == pin }
-        } catch (e: Exception) {
-            null
-        }
-    }
+    // (La distancia euclidiana y el matching por rostro se movieron a UserRepository, tarea #5.)
 
-    // --- 3. FUNCIÓN PARA CALCULAR DISTANCIA (RECONOCIMIENTO) ---
-    private fun calcularDistancia(face1: FloatArray, face2: FloatArray): Float {
-        var suma = 0.0f
-        for (i in face1.indices) {
-            val diff = face1[i] - face2[i]
-            suma += diff * diff
-        }
-        // Devolvemos la raíz cuadrada de la suma de diferencias al cuadrado (Distancia Euclidiana)
-        return Math.sqrt(suma.toDouble()).toFloat()
-    }
-
-    // --- 4. FUNCIÓN PARA REGISTRAR LA FICHADA (LOG DE ASISTENCIA) ---
+    // --- 4. FUNCIÓN PARA REGISTRAR LA FICHADA (LOG DE ASISTENCIA, CIFRADO POR LÍNEA) ---
     private fun registrarFichadaExitosa(pin: String) {
-        val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        val logEntry = "FECHA: $timestamp | PIN: $pin | STATUS: EXITOSO\n"
-
         try {
-            val fileAsistencia = File(filesDir, "log_asistencia.txt")
-            fileAsistencia.appendText(logEntry) // Agrega una línea al final del archivo
-            Log.d("ASISTENCIA", "Marcaje grabado: $logEntry")
+            // Genera la Fichada (id único + ts), la cifra por línea y la agrega al log.
+            val fichada = attendanceRepo.record(pin)
+            Log.d("ASISTENCIA", "Marcaje grabado: id=${fichada.id} | PIN: ${fichada.pin}")
         } catch (e: Exception) {
             Log.e("ERROR_LOG", "No se pudo grabar la fichada", e)
         }
     }
 
     private fun buscarUsuarioPorRostro(nuevoDescriptor: FloatArray): UsuarioFichaje? {
-        val file = File(filesDir, "usuarios_reloj.json")
-        if (!file.exists()) return null
-
-        try {
-            val json = file.readText()
-            val type = object : TypeToken<List<UsuarioFichaje>>() {}.type
-            val usuarios: List<UsuarioFichaje> = Gson().fromJson(json, type) ?: return null
-
-            var mejorCoincidencia: UsuarioFichaje? = null
-            var menorDistancia = 0.75f // Nuestro umbral límite
-
-            for (u in usuarios) {
-                val dist = calcularDistancia(nuevoDescriptor, u.descriptor.toFloatArray())
-
-                // 🟢 LOG IDEAL: Se ejecuta para CADA usuario en la base de datos
-                Log.d("FacialBuild", "Comparando con PIN: ${u.pin} | Distancia calculada: $dist (Umbral: $menorDistancia)")
-
-                if (dist < menorDistancia) {
-                    menorDistancia = dist
-                    mejorCoincidencia = u
-
-                    // Opcional: Log que te avisa cuándo se rompe el récord de mejor coincidencia
-                    Log.d("FacialBuild", "-> ¡Nueva mejor coincidencia temporal! PIN: ${u.pin} con dist: $dist")
-                }
-            }
-
-            // Log final para saber si encontramos a alguien al terminar el bucle
-            if (mejorCoincidencia != null) {
-                Log.d("FacialBuild", "✅ Rostro IDENTIFICADO: PIN ${mejorCoincidencia.pin} con distancia final de $menorDistancia")
-            } else {
-                Log.w("FacialBuild", "❌ Rostro NO RECONOCIDO. Ningún usuario estuvo por debajo del umbral 0.55f")
-            }
-
-            return mejorCoincidencia
-        } catch (e: Exception) {
-            Log.e("FacialBuild", "Error en buscarUsuarioPorRostro: ${e.message}")
-            return null
+        // El matching contra la caché cifrada vive en el repositorio; acá solo logueamos el resultado.
+        val match = userRepo.findByFace(nuevoDescriptor)
+        if (match != null) {
+            Log.d("FacialBuild", "✅ Rostro IDENTIFICADO: PIN ${match.pin}")
+        } else {
+            Log.w("FacialBuild", "❌ Rostro NO RECONOCIDO (ningún usuario bajo el umbral)")
         }
+        return match
     }
 
 } //Class MainActivity
