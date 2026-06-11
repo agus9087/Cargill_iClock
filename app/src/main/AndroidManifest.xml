@@ -3,6 +3,11 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Sincronización de fichadas al backend (Fase B). Permisos "normales": se otorgan
+         al instalar, sin diálogo en runtime. INTERNET habilita las llamadas HTTPS;
+         ACCESS_NETWORK_STATE permite chequear conectividad antes de drenar el outbox. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
