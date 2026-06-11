@@ -8,4 +8,6 @@
     <string name="btn_reset">Resetear</string>
     <string name="validating_pin">Validando PIN: %1$s</string>
     <string name="face_detected">Rostro detectado</string>
+
+
 </resources>
