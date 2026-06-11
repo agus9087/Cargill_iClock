@@ -172,34 +172,56 @@ class MainActivity : AppCompatActivity() {
                         val descriptor = obtenerDescriptorFacial(imageProxy, face)
 
                         if (descriptor != null) {
-                            val usuarioIdentificado = buscarUsuarioPorRostro(descriptor)
+                            if (isRegistering) {
+                                // MODO ENROLAR: el rostro detectado se guarda para el PIN ingresado.
+                                val pinEnrolado = currentPin
+                                guardarUsuarioLocal(pinEnrolado, descriptor)
+                                isRegistering = false
 
-                            if (usuarioIdentificado != null) {
-                                // FICHADA EXITOSA
-                                iaStatusText.text = "ACCESO CORRECTO: ID ${usuarioIdentificado.pin}"
+                                // Limpiamos el PIN y volvemos al estado de espera con la cámara apagada.
+                                currentPin = ""
+                                txtPinDisplay.text = getString(R.string.pin_hint)
+                                iaStatusText.text = "Rostro enrolado (PIN $pinEnrolado)"
                                 iaStatusText.setTextColor(ContextCompat.getColor(this, R.color.button_blue))
-                                registrarFichadaExitosa(usuarioIdentificado.pin)
 
-                                // 2. CORRECCIÓN CRÍTICA: Le damos 3 segundos de congelamiento al sistema
-                                // para que el usuario vea su éxito y se retire de la cámara.
                                 Handler(Looper.getMainLooper()).postDelayed({
                                     iaStatusText.text = "Esperando rostro..."
                                     iaStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.black))
-
-                                    // Al liberar la bandera aquí, cerramos la puerta a los frames viejos
+                                    stopCamera()
+                                    previewView.alpha = 0f
                                     esProcesandoMarcaje = false
-                                }, 3000) // 3000 milisegundos = 3 segundos de retraso
+                                }, 2000)
 
                             } else {
-                                // ROSTRO DETECTADO PERO NO REGISTRADO (Distancia > Umbral)
-                                iaStatusText.text = "Rostro no reconocido"
-                                iaStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.holo_red_dark))
+                                val usuarioIdentificado = buscarUsuarioPorRostro(descriptor)
 
-                                // Si no se reconoce, liberamos rápido (ej. 1.5 segundos) para que vuelva a intentar
-                                Handler(Looper.getMainLooper()).postDelayed({
-                                    iaStatusText.text = "Esperando rostro..."
-                                    esProcesandoMarcaje = false
-                                }, 1500)
+                                if (usuarioIdentificado != null) {
+                                    // FICHADA EXITOSA
+                                    iaStatusText.text = "ACCESO CORRECTO: ID ${usuarioIdentificado.pin}"
+                                    iaStatusText.setTextColor(ContextCompat.getColor(this, R.color.button_blue))
+                                    registrarFichadaExitosa(usuarioIdentificado.pin)
+
+                                    // 2. CORRECCIÓN CRÍTICA: Le damos 3 segundos de congelamiento al sistema
+                                    // para que el usuario vea su éxito y se retire de la cámara.
+                                    Handler(Looper.getMainLooper()).postDelayed({
+                                        iaStatusText.text = "Esperando rostro..."
+                                        iaStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.black))
+
+                                        // Al liberar la bandera aquí, cerramos la puerta a los frames viejos
+                                        esProcesandoMarcaje = false
+                                    }, 3000) // 3000 milisegundos = 3 segundos de retraso
+
+                                } else {
+                                    // ROSTRO DETECTADO PERO NO REGISTRADO (Distancia > Umbral)
+                                    iaStatusText.text = "Rostro no reconocido"
+                                    iaStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.holo_red_dark))
+
+                                    // Si no se reconoce, liberamos rápido (ej. 1.5 segundos) para que vuelva a intentar
+                                    Handler(Looper.getMainLooper()).postDelayed({
+                                        iaStatusText.text = "Esperando rostro..."
+                                        esProcesandoMarcaje = false
+                                    }, 1500)
+                                }
                             }
                         } else {
                             // Si el descriptor falló, liberamos la bandera de inmediato
@@ -399,8 +421,8 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (allPermissionsGranted()) {
-                //Abre la camara luego de conceder el permiso a cámara.
-                //startCamera()
+                // Abre la cámara al conceder el permiso. Respeta isRegistering si venías a enrolar.
+                startCamera()
                 Toast.makeText(this, "Permisos concedidos", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this, "Permisos no concedidos", Toast.LENGTH_SHORT).show()
@@ -438,6 +460,7 @@ class MainActivity : AppCompatActivity() {
 
             // 1. Si no hay PIN, usamos reconocimiento facial (Cámara)
             if (currentPin.isEmpty()) {
+                isRegistering = false // modo IDENTIFICAR: evita que un enrolamiento a medias se cuele
 
                 if (allPermissionsGranted()) {
                     // Tenemos permisos, arrancamos la cámara
@@ -486,7 +509,12 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Coloque su rostro frente a la cámara", Toast.LENGTH_LONG).show()
                 // Aquí indicamos que el próximo rostro detectado será para GUARDAR (Enrolar)
                 isRegistering = true
-                startCamera()
+                if (allPermissionsGranted()) {
+                    startCamera()
+                } else {
+                    // Sin permiso aún: lo pedimos; al concederse, el callback abre la cámara y enrola.
+                    ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS)
+                }
             } else {
                 Toast.makeText(this, "Por favor, ingrese primero su PIN", Toast.LENGTH_SHORT).show()
             }
