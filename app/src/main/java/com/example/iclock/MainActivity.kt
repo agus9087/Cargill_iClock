@@ -63,6 +63,7 @@ class MainActivity : AppCompatActivity() {
 
     private var isRegistering = false
     private var esProcesandoMarcaje = false // <-- AGREGA ESTA LÍNEA AQUÍ ARRIBA
+    private var pinEnValidacion = "" // PIN cuyo rostro se está validando con la cámara
 
     private val handler = Handler(Looper.getMainLooper())
     private val clockRunnable = object : Runnable {
@@ -112,6 +113,11 @@ class MainActivity : AppCompatActivity() {
     private fun startCamera() {
         // IMPORTANTE: Volver a mostrar el preview antes de iniciar
         previewView.alpha = 1f
+
+        // Cada vez que se abre la cámara arrancamos una sesión "limpia": liberamos la bandera
+        // para que el primer rostro pueda procesarse. Tras un fichaje la dejamos en true y la
+        // cámara se apaga, así que es acá donde se reinicia para el próximo usuario.
+        esProcesandoMarcaje = false
 
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
 
@@ -193,34 +199,46 @@ class MainActivity : AppCompatActivity() {
                                 }, 2000)
 
                             } else {
-                                val usuarioIdentificado = buscarUsuarioPorRostro(descriptor)
+                                // MODO VALIDAR: comparamos el rostro SOLO contra el descriptor
+                                // asociado al PIN ingresado (no contra todos los usuarios).
+                                val usuarioValidado = userRepo.matchByPin(pinEnValidacion, descriptor)
 
-                                if (usuarioIdentificado != null) {
-                                    // FICHADA EXITOSA
-                                    iaStatusText.text = "ACCESO CORRECTO: ID ${usuarioIdentificado.pin}"
+                                if (usuarioValidado != null) {
+                                    // COINCIDE: registramos UN ÚNICO fichaje y apagamos la cámara.
+                                    registrarFichadaExitosa(usuarioValidado.pin)
+                                    iaStatusText.text = "ACCESO CORRECTO: ID ${usuarioValidado.pin}"
                                     iaStatusText.setTextColor(ContextCompat.getColor(this, R.color.button_blue))
-                                    registrarFichadaExitosa(usuarioIdentificado.pin)
 
-                                    // 2. CORRECCIÓN CRÍTICA: Le damos 3 segundos de congelamiento al sistema
-                                    // para que el usuario vea su éxito y se retire de la cámara.
+                                    // Apagamos la cámara de inmediato: sin más frames no hay fichaje doble.
+                                    // 'esProcesandoMarcaje' queda en true a propósito para bloquear cualquier
+                                    // frame en vuelo; se reinicia al volver a abrir la cámara (startCamera).
+                                    stopCamera()
+                                    previewView.alpha = 0f
+                                    currentPin = ""
+                                    pinEnValidacion = ""
+                                    txtPinDisplay.text = getString(R.string.pin_hint)
+
                                     Handler(Looper.getMainLooper()).postDelayed({
                                         iaStatusText.text = "Esperando rostro..."
                                         iaStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.black))
-
-                                        // Al liberar la bandera aquí, cerramos la puerta a los frames viejos
-                                        esProcesandoMarcaje = false
-                                    }, 3000) // 3000 milisegundos = 3 segundos de retraso
+                                    }, 3000) // solo refresca el texto; la cámara ya está apagada
 
                                 } else {
-                                    // ROSTRO DETECTADO PERO NO REGISTRADO (Distancia > Umbral)
-                                    iaStatusText.text = "Rostro no reconocido"
+                                    // NO COINCIDE con el PIN: NO se registra ningún fichaje.
+                                    iaStatusText.text = "El rostro no coincide con el PIN $pinEnValidacion"
                                     iaStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.holo_red_dark))
 
-                                    // Si no se reconoce, liberamos rápido (ej. 1.5 segundos) para que vuelva a intentar
+                                    // Apagamos la cámara y limpiamos el PIN (cualquier intento borra el PIN ingresado).
+                                    stopCamera()
+                                    previewView.alpha = 0f
+                                    currentPin = ""
+                                    pinEnValidacion = ""
+                                    txtPinDisplay.text = getString(R.string.pin_hint)
+
                                     Handler(Looper.getMainLooper()).postDelayed({
                                         iaStatusText.text = "Esperando rostro..."
-                                        esProcesandoMarcaje = false
-                                    }, 1500)
+                                        iaStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.black))
+                                    }, 3000)
                                 }
                             }
                         } else {
@@ -458,29 +476,33 @@ class MainActivity : AppCompatActivity() {
     private fun setupActionButtons() {
         findViewById<Button>(R.id.btnMarcaje).setOnClickListener {
 
-            // 1. Si no hay PIN, usamos reconocimiento facial (Cámara)
+            // El fichaje exige PIN + cara: primero hay que ingresar el PIN.
             if (currentPin.isEmpty()) {
-                isRegistering = false // modo IDENTIFICAR: evita que un enrolamiento a medias se cuele
+                Toast.makeText(this, "Ingrese su PIN primero", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
 
-                if (allPermissionsGranted()) {
-                    // Tenemos permisos, arrancamos la cámara
-                    startCamera()
-                    Toast.makeText(this, "Iniciando reconocimiento facial...", Toast.LENGTH_SHORT).show()
-                } else {
-                    // NO tenemos permisos, los solicitamos (NO registramos nada todavía)
-                    ActivityCompat.requestPermissions(
-                        this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
-                    )
-                }
-
-            } else {
-                // 2. Si el PIN SÍ tiene texto, se ficha directamente por teclado numérico
-                registrarFichadaExitosa(currentPin)
-                Toast.makeText(this, "Fichada registrada por PIN", Toast.LENGTH_SHORT).show()
-
-                // Aquí deberías limpiar el PIN para el próximo usuario
+            // El PIN debe existir y tener un rostro enrolado en usuarios_reloj.json.
+            val usuario = buscarUsuarioPorPin(currentPin)
+            if (usuario == null) {
+                Toast.makeText(this, "El PIN no existe o no tiene rostro enrolado", Toast.LENGTH_SHORT).show()
+                // PIN inexistente: limpiamos el PIN ingresado.
                 currentPin = ""
-                // actualizarPantalla() (O la función que uses para limpiar el textview/label)
+                txtPinDisplay.text = getString(R.string.pin_hint)
+                return@setOnClickListener
+            }
+
+            // Modo VALIDAR: la cámara comparará el rostro SOLO contra el de este PIN.
+            isRegistering = false
+            pinEnValidacion = currentPin
+
+            if (allPermissionsGranted()) {
+                startCamera()
+            } else {
+                // Sin permiso aún: lo pedimos; al concederse, el callback abre la cámara.
+                ActivityCompat.requestPermissions(
+                    this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
+                )
             }
         }
 
@@ -499,6 +521,9 @@ class MainActivity : AppCompatActivity() {
                     txtPinDisplay.text = getString(R.string.pin_hint)
                 } else {
                     Toast.makeText(this, "Error: El PIN no existe", Toast.LENGTH_SHORT).show()
+                    // PIN inexistente: limpiamos el PIN ingresado.
+                    currentPin = ""
+                    txtPinDisplay.text = getString(R.string.pin_hint)
                 }
             }
         }
@@ -506,6 +531,13 @@ class MainActivity : AppCompatActivity() {
         // Botón Enrolar Rostro (PIN +4 y abre la cámara)
         findViewById<Button>(R.id.btnRostro).setOnClickListener {
             if (currentPin.length >= 4) { // Validamos que el PIN tenga al menos 4 dígitos
+                // No permitir re-enrolar: si el PIN ya tiene un rostro guardado, bloqueamos el cambio.
+                if (buscarUsuarioPorPin(currentPin) != null) {
+                    Toast.makeText(this, "El PIN $currentPin ya tiene un rostro asignado", Toast.LENGTH_LONG).show()
+                    currentPin = ""
+                    txtPinDisplay.text = getString(R.string.pin_hint)
+                    return@setOnClickListener
+                }
                 Toast.makeText(this, "Coloque su rostro frente a la cámara", Toast.LENGTH_LONG).show()
                 // Aquí indicamos que el próximo rostro detectado será para GUARDAR (Enrolar)
                 isRegistering = true

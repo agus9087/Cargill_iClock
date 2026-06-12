@@ -65,6 +65,21 @@ class UserRepository(context: Context) {
         }
 
     /**
+     * Valida el rostro [descriptor] SOLO contra el usuario asociado a [pin].
+     * Devuelve ese usuario si existe y la distancia euclidiana queda por debajo de [umbral];
+     * null si el PIN no está enrolado o si el rostro no coincide con el de ese PIN.
+     *
+     * A diferencia de [findByFace], no recorre todos los registros: compara únicamente contra
+     * el descriptor del PIN ingresado (decisión: fichaje por PIN + cara).
+     */
+    fun matchByPin(pin: String, descriptor: FloatArray, umbral: Float = UMBRAL_DEFAULT): UsuarioFichaje? =
+        synchronized(lock) {
+            val usuario = usuarios().find { it.pin == pin } ?: return null
+            val d = distancia(descriptor, usuario.descriptor)
+            if (d < umbral) usuario else null
+        }
+
+    /**
      * Enrola (o re-enrola) un usuario: reemplaza al existente con el mismo PIN, reescribe el
      * archivo COMPLETO cifrado y refresca la caché. Devuelve el usuario creado.
      */
